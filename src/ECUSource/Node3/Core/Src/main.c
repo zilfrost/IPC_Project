@@ -149,7 +149,9 @@ static HAL_StatusTypeDef bmp180_read_temperature(int8_t *out_temp_c)
     ret = HAL_I2C_Master_Receive(&hi2c1, BMP180_ADDR_R | 1, buf, 2, I2C_TIMEOUT_MS); if (ret != HAL_OK) return ret;
     int32_t UT = ((int32_t)buf[0] << 8) | buf[1];
     int32_t X1 = ((UT - (int32_t)bmp_AC6) * (int32_t)bmp_AC5) >> 15;
-    int32_t X2 = ((int32_t)bmp_MC << 11) / (X1 + (int32_t)bmp_MD);
+    int32_t denom = X1 + (int32_t)bmp_MD;
+    if (denom == 0) return HAL_ERROR;   /* guard: corrupt calibration data */
+    int32_t X2 = ((int32_t)bmp_MC << 11) / denom;
     int32_t B5 = X1 + X2;
     int32_t T  = (B5 + 8) >> 4;   /* units: 0.1 degC */
     int32_t temp = T / 10;
@@ -319,28 +321,41 @@ int main(void)
     if ((now - last_env_tx) >= 1000) {
       last_env_tx = now;
 
-      /* Re-calibrate BMP180 if calibration was lost (sensor was temporarily
-       * absent). Benign no-op when sensor is still absent; succeeds immediately
-       * when sensor is re-plugged so the next temperature read works. */
+      /* Re-calibrate BMP180 if calibration was lost.
+       * STM32F103 I2C BUSY bit can stick after a NACK — reset the bus
+       * immediately on failure so DS3231 in this same cycle gets a clean bus. */
+      uint8_t bmp_bus_was_reset = 0;
       if (!bmp_calibrated) {
-          bmp180_read_calibration();
+          if (bmp180_read_calibration() != HAL_OK) {
+              i2c_bus_reset();
+              bmp_bus_was_reset = 1;
+          }
       }
 
       /* TX: 0x103 -- Temperature (byte[0] = signed int8 cast to uint8) */
-      int8_t temp_c = 0;
-      if (bmp180_read_temperature(&temp_c) == HAL_OK) {
-        hb_bmp180 = 0x01;
-        if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) > 0) {
-          uint8_t temp_byte = (uint8_t)temp_c;
-          TxHeader.StdId = 0x103; TxHeader.DLC = 1;
-          HAL_CAN_AddTxMessage(&hcan, &TxHeader, &temp_byte, &TxMailbox);
+      if (!bmp_bus_was_reset) {
+        int8_t temp_c = 0;
+        if (bmp180_read_temperature(&temp_c) == HAL_OK) {
+          hb_bmp180 = 0x01;
+          if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) > 0) {
+            uint8_t temp_byte = (uint8_t)temp_c;
+            TxHeader.StdId = 0x103; TxHeader.DLC = 1;
+            HAL_CAN_AddTxMessage(&hcan, &TxHeader, &temp_byte, &TxMailbox);
+          }
+        } else {
+          hb_bmp180 = 0xFF;
+          /* Sensor was calibrated but read failed (disconnected mid-run).
+           * Reset bus so DS3231 read below uses a clean peripheral. */
+          i2c_bus_reset();
         }
       } else {
         hb_bmp180 = 0xFF;
-        i2c_bus_reset();   /* BMP180 failure leaves I2C bus stuck; reset before DS3231 read */
+        /* Calibration failed → bus already reset above; skip temp read. */
       }
 
-      /* TX: 0x105 -- DateTime YYMMDDHHMM (5 bytes) */
+      /* TX: 0x105 -- DateTime YYMMDDHHMM (5 bytes)
+       * Bus is always clean here: either BMP succeeded, or either reset path
+       * above ran before we reach this point. */
       uint8_t dt_buf[5];
       if (ds3231_read_datetime(dt_buf) == HAL_OK) {
         hb_ds3231 = 0x01;
@@ -352,9 +367,6 @@ int main(void)
         hb_ds3231 = 0xFF;
       }
 
-      /* Bus reset only when DS3231 fails — that indicates the I2C bus is stuck.
-       * BMP180-only failure means the sensor is absent; the bus is still clean
-       * and will recover automatically via the re-calibration guard above. */
       if (hb_ds3231 == 0xFF)
           i2c_bus_reset();
     }
