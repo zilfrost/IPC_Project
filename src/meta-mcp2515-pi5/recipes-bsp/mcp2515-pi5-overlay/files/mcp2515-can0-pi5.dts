@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// MCP2515 CAN controller overlay for Raspberry Pi 5 (BCM2712 + RP1)
+//
+// Fixes vs standard mcp2515-can0 overlay:
+//   1. compatible = "brcm,bcm2712" — correct SoC for Pi 5 bootloader patching
+//   2. IRQ_TYPE_LEVEL_LOW (8) instead of IRQ_TYPE_EDGE_FALLING (2) —
+//      required for Pi 5 PCIe MSI interrupt domain; edge mode drops frames
+//      when INT stays asserted across back-to-back CAN arrivals
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2712";
+
+    fragment@0 {
+        target = <&spi0>;
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            mcp2515: mcp2515@0 {
+                compatible = "microchip,mcp2515";
+                reg = <0>;                        /* CS0 = GPIO 8  */
+                spi-max-frequency = <10000000>;   /* 10 MHz        */
+                oscillator-frequency = <8000000>; /* 8 MHz crystal */
+                interrupt-parent = <&gpio>;
+                interrupts = <25 8>;              /* GPIO 25, IRQ_TYPE_LEVEL_LOW */
+            };
+        };
+    };
+};

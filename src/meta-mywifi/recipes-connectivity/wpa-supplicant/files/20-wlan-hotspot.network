@@ -1,0 +1,12 @@
+[Match]
+Name=wlan0
+SSID=VCU_Wifi
+
+[Network]
+DHCP=no
+
+[Address]
+Address=172.21.152.100/24
+
+[Route]
+Gateway=172.21.152.192

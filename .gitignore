@@ -1,0 +1,57 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build outputs
+build/
+Build/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.d
+
+# Qt / QML build artifacts
+*.pro.user
+*.pro.user.*
+Makefile
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+.qmake.stash
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake
+
+# STM32CubeIDE / Eclipse
+.cproject
+.project
+.settings/
+Debug/
+Release/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python (if any tooling scripts)
+__pycache__/
+*.pyc
+.env
+
+# AI workspace and Claude config — local only, not pushed to GitHub
+.ai-workspace/
+.claude/
+
+# Pi flash images and STM32 drivers — too large for git
+image/
+
+# STM32CubeIDE debug launch files — IDE-specific, not needed in repo
+*.launch

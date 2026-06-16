@@ -1,0 +1,16 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/main.qml</file>
+        <file>assets/Background.png</file>
+        <file>assets/Car.png</file>
+        <file>assets/Speed_Track.svg</file>
+        <file>assets/Speed_Fill.svg</file>
+        <file>assets/RPM_Track.svg</file>
+        <file>assets/RPM_Fill.svg</file>
+        <file>assets/Battery_Track.svg</file>
+        <file>assets/Battery_Fill.svg</file>
+        <file>assets/LeftSignal.svg</file>
+        <file>assets/RightSignal.svg</file>
+<file alias="assets/fonts/ZeroHour.otf">assets/fonts/Zero Hour.otf</file>
+    </qresource>
+</RCC>
