@@ -9,7 +9,7 @@ LICENSE     = "CLOSED"
 # and detects changes automatically — PR bumping is not needed.
 # Without externalsrc (plain file:// build), bump PR on every source change to
 # force sstate invalidation. Current value: r4.
-PR = "r5"
+PR = "r6"
 
 # ── Build-time dependencies ────────────────────────────────────────────────────
 # qtbase      : qmake, Qt core, Qt GUI, QPA/EGLFS plugins
@@ -23,7 +23,6 @@ DEPENDS = "qtbase qtdeclarative qtsvg"
 # remote or externalsrc overlay is required.
 SRC_URI = "file://qt_project \
            file://vcu-dashboard.service \
-           file://vcu-dashboard-start.sh \
           "
 S       = "${WORKDIR}/qt_project"
 
@@ -39,13 +38,11 @@ EXTRA_QMAKEVARS_PRE += "CONFIG+=release"
 do_install() {
     install -d ${D}${bindir}
     install -m 0755 ${B}/vcu-dashboard ${D}${bindir}/vcu-dashboard
-    install -m 0755 ${WORKDIR}/vcu-dashboard-start.sh ${D}${bindir}/vcu-dashboard-start.sh
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/vcu-dashboard.service ${D}${systemd_system_unitdir}/vcu-dashboard.service
 }
 
 FILES:${PN} = "${bindir}/vcu-dashboard"
-FILES:${PN} += "${bindir}/vcu-dashboard-start.sh"
 FILES:${PN} += "${systemd_system_unitdir}/vcu-dashboard.service"
 
 # ── Runtime dependencies ───────────────────────────────────────────────────────
