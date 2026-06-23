@@ -12,6 +12,7 @@
 // without path prefixes — the files themselves are not modified.
 #include "VehicleModel.h"
 #include "CanReader.h"
+#include "GpioButtonReader.h"
 
 int main(int argc, char *argv[])
 {
@@ -57,6 +58,14 @@ int main(int argc, char *argv[])
     // CanReader(VehicleModel*, interface) — model pointer comes first
     CanReader canReader(&vehicleModel, canInterface);
 
+    // GPIO 14 hazard button — syncs hazard state to CanReader so CAN 0x107 is
+    // suppressed while hazard is active (prevents CAN frames fighting the blink)
+    GpioButtonReader gpioReader(&vehicleModel, 14);
+    QObject::connect(&vehicleModel, &VehicleModel::hazardChanged,
+                     [&canReader, &vehicleModel]() {
+                         canReader.setHazardActive(vehicleModel.hazard());
+                     });
+
     // Expose the unmodified C++ model to QML as "vehicleModel"
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("vehicleModel", &vehicleModel);
@@ -72,11 +81,13 @@ int main(int argc, char *argv[])
     }
 
     canReader.start();
+    gpioReader.start();
 
     int result = app.exec();
 
-    // Stop thread before VehicleModel destructs
+    // Stop threads before VehicleModel destructs
     canReader.stop();
+    gpioReader.stop();
 
     return result;
 }

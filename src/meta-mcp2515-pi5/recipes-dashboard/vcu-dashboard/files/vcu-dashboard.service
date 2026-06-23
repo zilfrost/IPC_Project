@@ -1,7 +1,7 @@
 [Unit]
 Description=VCU EV Dashboard
 After=can0-setup.service
-Requires=can0-setup.service
+Wants=can0-setup.service
 
 [Service]
 ExecStart=/usr/bin/vcu-dashboard-start.sh

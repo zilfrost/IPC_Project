@@ -29,6 +29,7 @@ class VehicleModel : public QObject {
     Q_PROPERTY(bool    bmp180Ok        READ bmp180Ok                                  NOTIFY bmp180OkChanged)
     Q_PROPERTY(bool    ds3231Ok        READ ds3231Ok                                  NOTIFY ds3231OkChanged)
     Q_PROPERTY(bool    signalOk        READ signalOk                                  NOTIFY signalOkChanged)
+    Q_PROPERTY(bool    hazard          READ hazard                                    NOTIFY hazardChanged)
 
 public:
     explicit VehicleModel(QObject *parent = nullptr);
@@ -56,6 +57,7 @@ public:
     bool    bmp180Ok()         const { return m_bmp180Ok; }
     bool    ds3231Ok()         const { return m_ds3231Ok; }
     bool    signalOk()         const { return m_signalOk; }
+    bool    hazard()           const { return m_hazard; }
 
     void setSpeed(int v)              { v = qBound(0, v, 300);    if (m_speed       != v) { m_speed       = v; emit speedChanged(); } }
     void setBatterySoC(int v)         { v = qBound(0, v, 100);    if (m_batterySoC  != v) { m_batterySoC  = v; emit batterySoCChanged(); } }
@@ -75,6 +77,8 @@ public:
     void setNode1Heartbeat(bool encoderOkVal);
     void setNode2Heartbeat(bool socOkVal, bool gearOkVal, bool modeOkVal);
     void setNode3Heartbeat(bool bmp180OkVal, bool ds3231OkVal, bool signalOkVal);
+
+    Q_INVOKABLE void toggleHazard();
 
 signals:
     void speedChanged();
@@ -99,6 +103,7 @@ signals:
     void bmp180OkChanged();
     void ds3231OkChanged();
     void signalOkChanged();
+    void hazardChanged();
 
 private:
     void   saveOdometerToDisk(double value);
@@ -135,6 +140,10 @@ private:
     QTimer* m_hb1Timer { nullptr };
     QTimer* m_hb2Timer { nullptr };
     QTimer* m_hb3Timer { nullptr };
+
+    bool    m_hazard           { false };
+    bool    m_hazardBlinkState { false };
+    QTimer* m_hazardTimer      { nullptr };
 };
 
 #endif

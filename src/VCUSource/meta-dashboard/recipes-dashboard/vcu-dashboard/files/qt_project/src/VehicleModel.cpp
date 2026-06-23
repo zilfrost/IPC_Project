@@ -49,6 +49,14 @@ VehicleModel::VehicleModel(QObject* parent)
     connect(m_hb3Timer, &QTimer::timeout, this, [this]() {
         if (m_node3Heartbeat) { m_node3Heartbeat = false; emit node3HeartbeatChanged(); }
     });
+
+    m_hazardTimer = new QTimer(this);
+    m_hazardTimer->setInterval(500);
+    connect(m_hazardTimer, &QTimer::timeout, this, [this]() {
+        m_hazardBlinkState = !m_hazardBlinkState;
+        setLeftSignal(m_hazardBlinkState);
+        setRightSignal(m_hazardBlinkState);
+    });
 }
 
 VehicleModel::~VehicleModel()
@@ -144,6 +152,24 @@ double VehicleModel::loadOdometerFromDisk()
     }
 
     return qBound(0.0, val.toDouble(), 999999.0);
+}
+
+// ── Hazard Toggle ──────────────────────────────────────────────────────────
+
+void VehicleModel::toggleHazard()
+{
+    m_hazard = !m_hazard;
+    if (m_hazard) {
+        m_hazardBlinkState = true;
+        setLeftSignal(true);
+        setRightSignal(true);
+        m_hazardTimer->start();
+    } else {
+        m_hazardTimer->stop();
+        setLeftSignal(false);
+        setRightSignal(false);
+    }
+    emit hazardChanged();
 }
 
 // ── Heartbeat Setters ──────────────────────────────────────────────────────

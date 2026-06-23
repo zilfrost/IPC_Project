@@ -82,6 +82,8 @@ public:
         m_thread = std::thread(&CanReader::readLoop, this);
     }
 
+    void setHazardActive(bool v) { m_hazardActive.store(v, std::memory_order_relaxed); }
+
     void stop() {
         // [RACE FIX #2] Release store is visible to readLoop()'s acquire load across threads.
         m_running.store(false, std::memory_order_release);
@@ -146,6 +148,7 @@ private:
     std::atomic<bool>     m_bmp180Ok{false};
     std::atomic<bool>     m_ds3231Ok{false};
     std::atomic<bool>     m_signalOk{false};
+    std::atomic<bool>     m_hazardActive{false};
 
     void queueModelFlush() {
         bool expected = false;
@@ -330,6 +333,7 @@ private:
                 break;
             }
             case 0x107: {
+                if (m_hazardActive.load(std::memory_order_relaxed)) break;
                 if (__builtin_expect(frame.can_dlc < 1, 0)) {
                     qWarning() << "Ignoring turn signal frame with invalid DLC:" << frame.can_dlc;
                     break;
