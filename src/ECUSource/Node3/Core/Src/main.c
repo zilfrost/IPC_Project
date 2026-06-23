@@ -149,9 +149,7 @@ static HAL_StatusTypeDef bmp180_read_temperature(int8_t *out_temp_c)
     ret = HAL_I2C_Master_Receive(&hi2c1, BMP180_ADDR_R | 1, buf, 2, I2C_TIMEOUT_MS); if (ret != HAL_OK) return ret;
     int32_t UT = ((int32_t)buf[0] << 8) | buf[1];
     int32_t X1 = ((UT - (int32_t)bmp_AC6) * (int32_t)bmp_AC5) >> 15;
-    int32_t denom = X1 + (int32_t)bmp_MD;
-    if (denom == 0) return HAL_ERROR;   /* guard: corrupt calibration data */
-    int32_t X2 = ((int32_t)bmp_MC << 11) / denom;
+    int32_t X2 = ((int32_t)bmp_MC << 11) / (X1 + (int32_t)bmp_MD);
     int32_t B5 = X1 + X2;
     int32_t T  = (B5 + 8) >> 4;   /* units: 0.1 degC */
     int32_t temp = T / 10;
@@ -194,12 +192,55 @@ static HAL_StatusTypeDef ds3231_set_datetime(uint8_t yy, uint8_t mo, uint8_t dd,
 
 static void i2c_bus_reset(void)
 {
-    /* Release stuck I2C bus after sensor failure: de-init, short pause, re-init.
-     * Calibration is deferred to the next BLOCK B cycle via the !bmp_calibrated guard. */
-    HAL_I2C_DeInit(&hi2c1);
-    HAL_Delay(10);
+    /* Release stuck I2C bus by clocking SCL until slave releases SDA.
+     * Used when post-reset BMP180 or DS3231 leaves SDA stuck low. */
+    __HAL_I2C_DISABLE(&hi2c1);
+    HAL_Delay(1);
+
+    /* Switch PB6 (SCL) and PB7 (SDA) to GPIO output open-drain for manual recovery */
+    GPIO_InitTypeDef g = {0};
+    g.Pin   = GPIO_PIN_6 | GPIO_PIN_7;
+    g.Mode  = GPIO_MODE_OUTPUT_OD;
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+    g.Pull  = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOB, &g);
+    HAL_Delay(1);
+
+    /* Ensure both lines are HIGH to start */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+    HAL_Delay(1);
+
+    /* Clock SCL until SDA goes HIGH (slave releases bus), max 80 pulses */
+    for (int i = 0; i < 80; i++) {
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET) break;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+        HAL_Delay(1);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+        HAL_Delay(1);
+    }
+
+    /* Generate STOP condition: SCL LOW → SDA LOW → SCL HIGH → SDA HIGH */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+    HAL_Delay(1);
+
+    /* Software reset of I2C peripheral */
+    hi2c1.Instance->CR1 |= I2C_CR1_SWRST;
+    HAL_Delay(1);
+    hi2c1.Instance->CR1 &= ~I2C_CR1_SWRST;
+
+    /* Force MspInit to restore PB6/PB7 to alternate-function open-drain */
+    hi2c1.State = HAL_I2C_STATE_RESET;
     MX_I2C1_Init();
+
     bmp_calibrated = false;
+    bmp180_read_calibration();
 }
 
 /* USER CODE END 0 */
@@ -235,23 +276,13 @@ int main(void)
 
   /* USER CODE BEGIN 2 */
 
-  if (bmp180_read_calibration() == HAL_OK) {
-      hb_bmp180 = 0x01;   /* sensor present at boot; first heartbeat shows correct state */
-  } else {
-      /* Failed calibration may leave I2C in error state; recover before DS3231 init read */
-      HAL_I2C_DeInit(&hi2c1);
-      HAL_Delay(10);
-      MX_I2C1_Init();
-  }
+  bmp180_read_calibration();   /* bmp_calibrated stays false if sensor absent  */
 
   /* Set RTC if uninitialized (year == 0: chip never set or lost battery backup) */
   {
       uint8_t dt_init[5];
-      if (ds3231_read_datetime(dt_init) == HAL_OK) {
-          hb_ds3231 = 0x01;   /* RTC present at boot; first heartbeat shows correct state */
-          if (dt_init[0] == 0)
-              ds3231_set_datetime(BUILD_YEAR, BUILD_MON, BUILD_DAY, BUILD_HOUR, BUILD_MIN);
-      }
+      if (ds3231_read_datetime(dt_init) == HAL_OK && dt_init[0] == 0)
+          ds3231_set_datetime(BUILD_YEAR, BUILD_MON, BUILD_DAY, BUILD_HOUR, BUILD_MIN);
   }
 
   /* CAN Filter -- Accept-All (32-bit mask mode, mask=0x0000 -> all IDs pass).
@@ -321,41 +352,27 @@ int main(void)
     if ((now - last_env_tx) >= 1000) {
       last_env_tx = now;
 
-      /* Re-calibrate BMP180 if calibration was lost.
-       * STM32F103 I2C BUSY bit can stick after a NACK — reset the bus
-       * immediately on failure so DS3231 in this same cycle gets a clean bus. */
-      uint8_t bmp_bus_was_reset = 0;
+      /* Re-calibrate BMP180 if calibration was lost (sensor was temporarily
+       * absent). Benign no-op when sensor is still absent; succeeds immediately
+       * when sensor is re-plugged so the next temperature read works. */
       if (!bmp_calibrated) {
-          if (bmp180_read_calibration() != HAL_OK) {
-              i2c_bus_reset();
-              bmp_bus_was_reset = 1;
-          }
+          bmp180_read_calibration();
       }
 
       /* TX: 0x103 -- Temperature (byte[0] = signed int8 cast to uint8) */
-      if (!bmp_bus_was_reset) {
-        int8_t temp_c = 0;
-        if (bmp180_read_temperature(&temp_c) == HAL_OK) {
-          hb_bmp180 = 0x01;
-          if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) > 0) {
-            uint8_t temp_byte = (uint8_t)temp_c;
-            TxHeader.StdId = 0x103; TxHeader.DLC = 1;
-            HAL_CAN_AddTxMessage(&hcan, &TxHeader, &temp_byte, &TxMailbox);
-          }
-        } else {
-          hb_bmp180 = 0xFF;
-          /* Sensor was calibrated but read failed (disconnected mid-run).
-           * Reset bus so DS3231 read below uses a clean peripheral. */
-          i2c_bus_reset();
+      int8_t temp_c = 0;
+      if (bmp180_read_temperature(&temp_c) == HAL_OK) {
+        hb_bmp180 = 0x01;
+        if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) > 0) {
+          uint8_t temp_byte = (uint8_t)temp_c;
+          TxHeader.StdId = 0x103; TxHeader.DLC = 1;
+          HAL_CAN_AddTxMessage(&hcan, &TxHeader, &temp_byte, &TxMailbox);
         }
       } else {
         hb_bmp180 = 0xFF;
-        /* Calibration failed → bus already reset above; skip temp read. */
       }
 
-      /* TX: 0x105 -- DateTime YYMMDDHHMM (5 bytes)
-       * Bus is always clean here: either BMP succeeded, or either reset path
-       * above ran before we reach this point. */
+      /* TX: 0x105 -- DateTime YYMMDDHHMM (5 bytes) */
       uint8_t dt_buf[5];
       if (ds3231_read_datetime(dt_buf) == HAL_OK) {
         hb_ds3231 = 0x01;
@@ -367,7 +384,9 @@ int main(void)
         hb_ds3231 = 0xFF;
       }
 
-      if (hb_ds3231 == 0xFF)
+      /* Bus reset when DS3231 fails or BMP180 calibration is lost.
+       * Either condition indicates a stuck I2C bus that needs SCL clock recovery. */
+      if (hb_ds3231 == 0xFF || !bmp_calibrated)
           i2c_bus_reset();
     }
     /* TX: 0x1F3 -- Node 3 Heartbeat @ 500 ms
