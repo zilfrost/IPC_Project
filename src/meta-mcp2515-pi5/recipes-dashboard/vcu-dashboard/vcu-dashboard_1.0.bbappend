@@ -7,7 +7,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 # PR:append forces sstate invalidation when this bbappend or its files change.
 # Increment the digit whenever vcu-dashboard.service or vcu-dashboard-start.sh is modified.
-PR:append = ".1"
+PR:append = ".2"
 
 SRC_URI:append = " file://vcu-dashboard-start.sh"
 
