@@ -10,12 +10,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
+#include <dirent.h>
 #include "VehicleModel.h"
 
 // Monitors a GPIO pin via sysfs and calls VehicleModel::toggleHazard() on
 // each debounced falling edge (active-low button press).
-// Requires the sysfs GPIO interface (/sys/class/gpio/) to be available.
-// NOTE: GPIO 14 (BCM) is also UART TX — ensure serial console is disabled in /boot/config.txt.
+// NOTE: GPIO 14 (BCM) is also UART TX — ensure enable_uart=0 in /boot/config.txt.
 class GpioButtonReader {
 public:
     explicit GpioButtonReader(VehicleModel* model, int gpioPin = 14)
@@ -40,20 +40,59 @@ private:
     std::atomic<bool>  m_running;
     std::thread        m_thread;
 
-    bool exportGpio() {
+    // On modern kernels the GPIO chip base is not 0 (Pi 4 = 512, Pi 5 varies).
+    // Scan /sys/class/gpio/gpiochip* and pick the chip with the most lines
+    // (= main BCM controller). BCM pin N maps to sysfs pin (base + N).
+    int resolveSysfsPin(int bcmPin) {
+        DIR* dir = opendir("/sys/class/gpio");
+        if (!dir) return bcmPin; // fallback: old kernel with base 0
+
+        int bestBase  = 0;
+        int bestNgpio = 0;
+        struct dirent* ent;
+
+        while ((ent = readdir(dir)) != nullptr) {
+            if (strncmp(ent->d_name, "gpiochip", 8) != 0) continue;
+
+            char path[128];
+            int base = 0, ngpio = 0;
+
+            snprintf(path, sizeof(path), "/sys/class/gpio/%s/base", ent->d_name);
+            FILE* f = fopen(path, "r");
+            if (!f) continue;
+            fscanf(f, "%d", &base);
+            fclose(f);
+
+            snprintf(path, sizeof(path), "/sys/class/gpio/%s/ngpio", ent->d_name);
+            f = fopen(path, "r");
+            if (!f) continue;
+            fscanf(f, "%d", &ngpio);
+            fclose(f);
+
+            if (ngpio > bestNgpio) {
+                bestNgpio = ngpio;
+                bestBase  = base;
+            }
+        }
+        closedir(dir);
+
+        return bestBase + bcmPin;
+    }
+
+    bool exportGpio(int sysfsPin) {
         char buf[64];
 
         // Export pin (ignore EBUSY — already exported is fine)
         FILE* f = fopen("/sys/class/gpio/export", "w");
-        if (f) { fprintf(f, "%d", m_gpioPin); fclose(f); }
+        if (f) { fprintf(f, "%d", sysfsPin); fclose(f); }
         usleep(100000); // 100 ms for kernel to create the sysfs entry
 
-        snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/direction", m_gpioPin);
+        snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/direction", sysfsPin);
         f = fopen(buf, "w");
         if (!f) return false;
         fputs("in", f); fclose(f);
 
-        snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/edge", m_gpioPin);
+        snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/edge", sysfsPin);
         f = fopen(buf, "w");
         if (!f) return false;
         fputs("falling", f); fclose(f);
@@ -62,13 +101,15 @@ private:
     }
 
     void readLoop() {
-        if (!exportGpio()) {
+        const int sysfsPin = resolveSysfsPin(m_gpioPin);
+
+        if (!exportGpio(sysfsPin)) {
             m_running.store(false, std::memory_order_relaxed);
             return;
         }
 
         char buf[64];
-        snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/value", m_gpioPin);
+        snprintf(buf, sizeof(buf), "/sys/class/gpio/gpio%d/value", sysfsPin);
         int fd = open(buf, O_RDONLY);
         if (fd < 0) {
             m_running.store(false, std::memory_order_relaxed);
